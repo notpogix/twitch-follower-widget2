@@ -44,6 +44,15 @@
             color: #aaa;
             font-style: italic;
         }
+        
+        .error {
+            color: #ff4444;
+        }
+        
+        .channel-name {
+            color: #ffffff;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
@@ -51,15 +60,31 @@
         <p class="follower-goal-text">
             Followers goal: <span class="follower-count">0</span>/<span class="goal-count">200</span>
         </p>
+        <p class="channel-display" style="display: none;">
+            Tracking: <span class="channel-name">channel</span>
+        </p>
     </div>
 
     <script>
-        // Configuration
-        const TWITCH_USERNAME = 'YOUR_TWITCH_USERNAME'; // CHANGE THIS
-        const GOAL_COUNT = 200;
-        const UPDATE_INTERVAL = 10000; // Check every 10 seconds
+        // Get channel name from URL parameters
+        function getUrlParameter(name) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(name);
+        }
+
+        // Get channel from URL or use default
+        const TWITCH_CHANNEL = getUrlParameter('channel') || 'shroud'; // Default channel
+        const GOAL_COUNT = getUrlParameter('goal') || 200; // Default goal
+
+        // Update display to show which channel we're tracking
+        const channelDisplay = document.querySelector('.channel-display');
+        const channelNameElement = document.querySelector('.channel-name');
         
-        // DOM elements
+        if (TWITCH_CHANNEL) {
+            channelNameElement.textContent = TWITCH_CHANNEL;
+            channelDisplay.style.display = 'block';
+        }
+
         const followerCountElement = document.querySelector('.follower-count');
         const goalCountElement = document.querySelector('.goal-count');
         
@@ -68,73 +93,134 @@
         
         let currentFollowerCount = 0;
         
-        // Function to fetch follower count from Twitch API
+        // Method 1: Using Twitch API
         async function fetchFollowerCount() {
             try {
-                // Using a CORS proxy to avoid CORS issues on GitHub Pages
-                const proxyUrl = 'https://api.allorigins.win/raw?url=';
-                const apiUrl = `https://twitchtracker.com/api/channels/summary/${TWITCH_USERNAME}`;
+                console.log(`Fetching followers for: ${TWITCH_CHANNEL}`);
+                const response = await fetch(`https://api.twitch.tv/helix/users?login=${TWITCH_CHANNEL}`, {
+                    headers: {
+                        'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+                    }
+                });
                 
-                const response = await fetch(proxyUrl + encodeURIComponent(apiUrl));
+                if (!response.ok) {
+                    throw new Error('Twitch API failed');
+                }
+                
+                const data = await response.json();
+                
+                if (data.data && data.data.length > 0) {
+                    const userId = data.data[0].id;
+                    await fetchFollowerCountByUserId(userId);
+                } else {
+                    throw new Error('User not found');
+                }
+                
+            } catch (error) {
+                console.log('Method 1 failed, trying Method 2...');
+                await fetchFollowerCountAlternative();
+            }
+        }
+        
+        async function fetchFollowerCountByUserId(userId) {
+            try {
+                const response = await fetch(`https://api.twitch.tv/helix/users/follows?to_id=${userId}&first=1`, {
+                    headers: {
+                        'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko'
+                    }
+                });
+                
+                if (!response.ok) throw new Error('Follow count API failed');
+                
+                const data = await response.json();
+                updateFollowerCount(data.total);
+                
+            } catch (error) {
+                console.log('Twitch follow API failed, trying alternative...');
+                await fetchFollowerCountAlternative();
+            }
+        }
+        
+        // Method 2: Alternative API
+        async function fetchFollowerCountAlternative() {
+            try {
+                const response = await fetch(`https://twitch-follower-counter.vercel.app/api/followers?channel=${TWITCH_CHANNEL}`);
+                
+                if (!response.ok) throw new Error('Alternative API failed');
+                
                 const data = await response.json();
                 
                 if (data.followers) {
                     updateFollowerCount(data.followers);
                 } else {
-                    throw new Error('No follower data found');
+                    throw new Error('No follower data');
                 }
                 
             } catch (error) {
-                console.error('Error fetching follower count:', error);
-                // Fallback: Try alternative method
-                try {
-                    await fetchFollowerCountAlternative();
-                } catch (fallbackError) {
-                    console.error('Fallback also failed:', fallbackError);
-                    followerCountElement.textContent = 'Error';
+                console.log('Method 2 failed, trying Method 3...');
+                await fetchFollowerCountFallback();
+            }
+        }
+        
+        // Method 3: Fallback API
+        async function fetchFollowerCountFallback() {
+            try {
+                const response = await fetch(`https://twitch-api.zerody.one/api/followers?username=${TWITCH_CHANNEL}`);
+                
+                if (!response.ok) throw new Error('Fallback API failed');
+                
+                const data = await response.json();
+                
+                if (data.followerCount !== undefined) {
+                    updateFollowerCount(data.followerCount);
+                } else {
+                    throw new Error('All methods failed');
                 }
+                
+            } catch (error) {
+                console.error('All API methods failed:', error);
+                followerCountElement.textContent = 'Error';
+                followerCountElement.classList.add('error');
             }
         }
         
-        // Alternative method using different API
-        async function fetchFollowerCountAlternative() {
-            const response = await fetch(`https://twitch-follower-counter.vercel.app/api/followers?channel=${TWITCH_USERNAME}`);
-            const data = await response.json();
-            
-            if (data.followers) {
-                updateFollowerCount(data.followers);
-            } else {
-                throw new Error('Alternative API failed');
-            }
-        }
-        
-        // Function to update the follower count display
         function updateFollowerCount(count) {
             if (count !== currentFollowerCount) {
                 currentFollowerCount = count;
-                followerCountElement.textContent = count;
-                followerCountElement.classList.remove('loading');
+                followerCountElement.textContent = count.toLocaleString();
+                followerCountElement.classList.remove('loading', 'error');
                 
-                // Add animation for new follower
-                if (count > parseInt(followerCountElement.textContent) || followerCountElement.textContent === 'Loading...') {
-                    followerCountElement.style.transform = 'scale(1.2)';
+                // Animation for new follower
+                if (count > parseInt(followerCountElement.dataset.lastCount || 0)) {
+                    followerCountElement.style.transform = 'scale(1.3)';
+                    followerCountElement.style.color = '#00ff00';
                     setTimeout(() => {
                         followerCountElement.style.transform = 'scale(1)';
-                    }, 300);
+                        followerCountElement.style.color = '#9146FF';
+                    }, 500);
                 }
+                
+                followerCountElement.dataset.lastCount = count;
             }
         }
         
         // Initialize
-        followerCountElement.textContent = 'Loading...';
-        followerCountElement.classList.add('loading');
+        function init() {
+            followerCountElement.textContent = 'Loading...';
+            followerCountElement.classList.add('loading');
+            
+            // Start fetching
+            fetchFollowerCount();
+            
+            // Update every 30 seconds
+            setInterval(fetchFollowerCount, 30000);
+            
+            // More frequent checks (every 5 seconds)
+            setInterval(fetchFollowerCount, 5000);
+        }
         
-        // Start periodic updates
-        fetchFollowerCount();
-        setInterval(fetchFollowerCount, UPDATE_INTERVAL);
-        
-        // More frequent checks (every 2 seconds) for better "real-time" feel
-        setInterval(fetchFollowerCount, 2000);
+        // Start the widget
+        init();
     </script>
 </body>
 </html>
